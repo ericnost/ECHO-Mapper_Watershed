@@ -1,0 +1,152 @@
+<html lang="en">
+	<head>
+	    <title>ECHO Mapper: Tracking Environmental Enforcement and Compliance</title>
+	    <meta charset="utf-8">
+	    <script src="/jquery/dist/jquery.js"></script>
+	    <script src="/leaflet/dist/leaflet.js"></script>
+	    <link rel="stylesheet" href="/leaflet/dist/leaflet.css" />
+	    <script src="/nprogress/nprogress.js"></script>
+	    <link rel="stylesheet" href="/nprogress/nprogress.css"/>
+	    <link rel="stylesheet" href="/bootstrap/dist/css/bootstrap.min.css"/>
+	    <script src="https://cdn-geoweb.s3.amazonaws.com/esri-leaflet/0.0.1-beta.5/esri-leaflet.js"></script>
+	    <script src="https://cdn-geoweb.s3.amazonaws.com/esri-leaflet-geocoder/0.0.1-beta.5/esri-leaflet-geocoder.js"></script>
+	    <link rel="stylesheet" type="text/css" href="https://cdn-geoweb.s3.amazonaws.com/esri-leaflet-geocoder/0.0.1-beta.5/esri-leaflet-geocoder.css">
+	    <style>
+	    	body {
+	    		margin: 1%;
+	    	}
+		    .loaderImage{
+		      display: none;
+		      position: absolute;
+		      margin: auto;
+		      height: 50px;
+		      width: 50px;
+		      top: 40%;
+		      left: 50%;
+		      z-index: 99999;
+		    }
+	  	</style>
+	</head>
+
+  	<body>
+  
+		<div class="loaderImage"> </div>
+
+		<div><h3><em>e</em>nvironmental <em>e</em>nforcement <em>w</em>atch</h3></div>
+
+		<div class="container-fluid">
+		  	<div class="row">
+		    	<div class="col-12" id="map" style="height:80vh">
+		    	</div>
+		  	</div>
+		</div>
+  
+ <!-- <button onclick="post()">Submit</button>  -->
+    
+    <script>
+    NProgress.configure({ parent: '.loaderImage' });
+ 	
+    var data = <%- JSON.stringify(data) %>
+    
+    //set up map
+    var map =  L.map('map',{ center: [<%= clat %>,<%= clng %>], zoom: <%= zoom %>, minZoom: 10}); //, maxBoundsViscosity: .4
+
+    L.tileLayer('https://stamen-tiles-{s}.a.ssl.fastly.net/toner-lite/{z}/{x}/{y}{r}.png', {
+            attribution: 'Map tiles by <a href="http://stamen.com">Stamen Design</a>, <a href="http://creativecommons.org/licenses/by/3.0">CC BY 3.0</a> &mdash; Map data &copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
+	
+	var markers;
+    var markermaker = function(data){
+    	console.log(data)
+    	if (data.features) {
+    		//
+    		//order markers so that CWA violations are on top
+    		data.features.sort(function(a,b){
+    			//a.properties["num"] = 0
+				if (a.properties.f2 == "Violation Identified"){a.properties.num = 1} else {a.properties.num = 0} 
+				if (b.properties.f2 == "Violation Identified" || a.properties.num == 1){b.properties.num = 1} else {b.properties.num = 0} 	
+    				//console.log(b.properties.f2,a.properties.f2)
+    			return a.properties.num - b.properties.num
+    		})
+    		//data.features.reverse()
+    		markers = L.geoJSON( data, {
+    			pointToLayer: function (feature, latlng) {
+    				var c = feature.properties.f2 == "Violation Identified" ? "red" : "black"
+    				var r = (feature.properties.f3 == "Violation w/in 1 Year" || feature.properties.f4 == "Violation") ? 16 : 8 // bigger size if at least one other program in violation
+            		return L.circleMarker(latlng).setStyle({fillColor: c, fillOpacity: .75, color: "black", weight: .5}).setRadius(r)
+    			},
+    			zIndexOffset: 1000		
+			}).bindPopup(function (layer) {
+    			return "Name: "+layer.feature.properties.f1+"<br> In compliance with the Clean Water Act? "+layer.feature.properties.f2+"<br> In compliance with the Clean Air Act? "+layer.feature.properties.f3+"<br> In compliance with RCRA (hazardous waste law)? "+layer.feature.properties.f4
+    		}).addTo(map)
+    	}
+	}
+	//mapmaker(data) //initial run
+
+	var layer;
+    var layermaker = function(data){
+	if (data.features) {
+		layer = L.geoJSON( data, {
+				style: {"fill": "blue", "fillOpacity": .2},
+    			onEachFeature: function (feature, layer){
+    				layer.on('click', function(e){
+
+						$('.loaderImage').show();
+					    NProgress.start()
+
+					    var id = e.target.feature.properties.f1
+						
+						$.post("/markers", {id:id}, function(resp) {
+
+    						console.log(resp)
+					        if (markers){map.removeLayer(markers);}
+					        markermaker(resp)
+						}).done(function(resp){
+								NProgress.done();$('.loaderImage').hide();
+							})
+					})
+    			}	
+			}).setZIndex(1).addTo(map)
+		}
+	}
+	layermaker(data) //initial run
+
+
+    
+    var searchControl = new L.esri.Controls.Geosearch().addTo(map);
+
+    map.on("dragend", function(e){
+    	console.log(e)
+    	$('.loaderImage').show();
+	    NProgress.start()
+
+    	var bounds = map.getBounds();
+    	$.post("/watershed", {minLat: bounds._southWest.lat, minLon:bounds._southWest.lng, maxLat:bounds._northEast.lat, maxLon:bounds._northEast.lng}, function(resp) {
+	        map.removeLayer(layer);
+	        layermaker(resp)
+	        // order layers so that markers on top?
+		}).done(function(resp){
+				NProgress.done();$('.loaderImage').hide();
+		})    
+    })
+
+	searchControl.on('results', function(res){
+		console.log(res)
+
+		var bounds = res.results[0].bounds
+		console.log(bounds)
+		$('.loaderImage').show();
+	    NProgress.start()
+		
+		$.post("/watershed", {minLat: bounds._southWest.lat-.1, minLon:bounds._southWest.lng-.1, maxLat:bounds._northEast.lat+.1, maxLon:bounds._northEast.lng+.1}, function(resp) {
+	        map.removeLayer(layer);
+	        if(markers){map.removeLayer(markers)}
+	        layermaker(resp)
+	    	// order layers so that markers on top?
+		}).done(function(resp){
+				NProgress.done();$('.loaderImage').hide();
+			})    
+	});
+		  
+  </script>
+</body>
+</html>
